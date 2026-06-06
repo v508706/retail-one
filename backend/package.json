@@ -4,10 +4,14 @@
   "description": "RetailOne multi-tenant retail & wholesale platform — backend API",
   "main": "src/server.js",
   "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "scripts": {
     "start": "node --experimental-sqlite src/server.js",
     "dev": "node --experimental-sqlite --watch src/server.js",
-    "seed": "node --experimental-sqlite src/database/seed.js"
+    "seed": "node --experimental-sqlite src/database/seed.js",
+    "build": "echo 'No build step required'"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

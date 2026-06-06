@@ -27,7 +27,17 @@ getDb();
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-app.use(cors({ origin: '*' }));
+// Allow requests from:
+//  - local dev (any origin)
+//  - the Vercel frontend (set FRONTEND_URL on Render, e.g. https://retail-one.vercel.app)
+const allowedOrigins = process.env.FRONTEND_URL
+  ? [process.env.FRONTEND_URL, /\.vercel\.app$/, 'http://localhost:5173']
+  : true; // dev: allow all
+
+app.use(cors({
+  origin: allowedOrigins,
+  credentials: true,
+}));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 

@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: retailone-backend
+    runtime: node
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: 22.0.0
+      - key: PORT
+        value: 3001
+      - key: JWT_SECRET
+        generateValue: true          # Render auto-generates a secure random value
+      - key: NODE_OPTIONS
+        value: --experimental-sqlite
+      - key: FRONTEND_URL
+        sync: false                  # Set manually in Render dashboard after Vercel deploy
+    disk:
+      name: retailone-data
+      mountPath: /var/data
+      sizeGB: 1
