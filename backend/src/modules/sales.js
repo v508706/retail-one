@@ -8,16 +8,30 @@ const router = Router();
 const now = () => new Date().toISOString();
 
 function nextDocNo(db, tenantId, firmId, terminalId, docType) {
-  const seq = db.prepare(`SELECT * FROM document_sequences WHERE tenant_id=? AND firm_id=? AND doc_type=?`).get(tenantId, firmId, docType);
+  // Must be called INSIDE a transaction for atomicity.
+  // Use `IS ?` so NULL terminal_id matches correctly (NULL IS NULL = true in SQLite).
+  const tid = terminalId || null;
+  const defaultPrefix = docType.toUpperCase().slice(0, 3) + '-';
+
+  let seq = db.prepare(
+    `SELECT * FROM document_sequences
+     WHERE tenant_id=? AND firm_id=? AND doc_type=?
+     AND (terminal_id IS ? OR terminal_id=?)`
+  ).get(tenantId, firmId, docType, tid, tid);
+
   if (!seq) {
-    const id = crypto.randomUUID();
-    db.prepare(`INSERT INTO document_sequences(id,tenant_id,firm_id,terminal_id,doc_type,prefix,next_no) VALUES(?,?,?,?,?,?,1)`
-    ).run(id, tenantId, firmId, terminalId || null, docType, docType.toUpperCase().slice(0,3) + '-');
-    return `${docType.toUpperCase().slice(0,3)}-1`;
+    // Create sequence. Start next_no at 2 so the NEXT call correctly gets 2.
+    db.prepare(
+      `INSERT INTO document_sequences(id,tenant_id,firm_id,terminal_id,doc_type,prefix,next_no)
+       VALUES(?,?,?,?,?,?,2)`
+    ).run(crypto.randomUUID(), tenantId, firmId, tid, docType, defaultPrefix);
+    return `${defaultPrefix}1`;   // this call uses 1
   }
-  const no = `${seq.prefix}${seq.next_no}`;
+
+  // Read the current value, then increment.
+  const used = seq.next_no;
   db.prepare(`UPDATE document_sequences SET next_no=next_no+1 WHERE id=?`).run(seq.id);
-  return no;
+  return `${seq.prefix}${used}`;
 }
 
 function postSaleDoc(db, tenantId, docId, doc, items) {
@@ -86,10 +100,9 @@ router.post('/sales', requireAuth, (req, res) => {
   if (!firm_id) return res.status(422).json({ error: { code: 'VALIDATION_FAILED', message: 'firm_id required' } });
 
   const docId = crypto.randomUUID();
-  const doc_no = nextDocNo(db, t, firm_id, terminal_id, doc_type);
   const date = doc_date || new Date().toISOString().slice(0, 10);
 
-  // calc items
+  // calc items (pure computation — outside transaction is fine)
   const processedItems = rawItems.map(it => {
     const { discount_amt, tax_amt, line_total } = calcLineTotal(
       it.price_unit, it.qty, it.discount_pct || 0, it.discount_amt || 0, it.tax_pct || 0, it.price_tax_incl || 0
@@ -107,6 +120,11 @@ router.post('/sales', requireAuth, (req, res) => {
   const status = balance_amt <= 0 ? 'paid' : paid_amt > 0 ? 'partial' : 'open';
 
   const tx = db.transaction(() => {
+    // Generate doc_no INSIDE the transaction so the sequence increment
+    // and the INSERT are atomic — prevents duplicate numbers on retry or
+    // concurrent requests.
+    const doc_no = nextDocNo(db, t, firm_id, terminal_id, doc_type);
+
     db.prepare(`INSERT INTO sale_documents(id,tenant_id,firm_id,store_id,terminal_id,doc_type,doc_no,doc_date,due_date,party_id,state_of_supply,ref_no,orig_doc_id,price_type,sub_total,discount_amt,tax_amt,other_charges,round_off,total,paid_amt,balance_amt,status,notes,terms,created_by,created_at,updated_at,version,sync_state) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,'synced')`
     ).run(docId, t, firm_id, store_id || null, terminal_id || null, doc_type, doc_no, date, due_date || null, party_id || null, state_of_supply || null, ref_no || null, orig_doc_id || null, price_type, sub_total, discount_amt, tax_amt, other_charges, round_off, total, paid_amt, balance_amt, status, notes || null, terms || null, req.user.sub, now(), now());
 
@@ -134,22 +152,22 @@ router.post('/sales/:id/convert', requireAuth, (req, res) => {
   const db = getDb(); const t = req.tenantId;
   const doc = db.prepare(`SELECT * FROM sale_documents WHERE id=? AND tenant_id=? AND deleted_at IS NULL`).get(req.params.id, t);
   if (!doc) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Document not found' } });
-
-  db.prepare(`UPDATE sale_documents SET status='converted', updated_at=? WHERE id=?`).run(now(), req.params.id);
   const items = db.prepare(`SELECT * FROM sale_document_items WHERE document_id=? AND tenant_id=?`).all(req.params.id, t);
 
-  // create invoice from estimate
-  req.body = { ...doc, items, doc_type: 'invoice', orig_doc_id: req.params.id };
-  // re-route through create
   const docId = crypto.randomUUID();
-  const doc_no = nextDocNo(db, t, doc.firm_id, doc.terminal_id, 'invoice');
-  db.prepare(`INSERT INTO sale_documents(id,tenant_id,firm_id,store_id,terminal_id,doc_type,doc_no,doc_date,party_id,sub_total,discount_amt,tax_amt,other_charges,round_off,total,paid_amt,balance_amt,status,notes,terms,orig_doc_id,created_by,created_at,updated_at,version,sync_state) VALUES(?,?,?,?,?,'invoice',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,'synced')`
-  ).run(docId, t, doc.firm_id, doc.store_id, doc.terminal_id, doc_no, new Date().toISOString().slice(0,10), doc.party_id, doc.sub_total, doc.discount_amt, doc.tax_amt, doc.other_charges, doc.round_off, doc.total, 0, doc.total, 'open', doc.notes, doc.terms, req.params.id, req.user.sub, now(), now());
-
-  for (const it of items) {
-    db.prepare(`INSERT INTO sale_document_items(id,tenant_id,document_id,item_id,item_name,hsn_sac,qty,unit,price_unit,price_tax_incl,discount_pct,discount_amt,tax_pct,tax_amt,cgst,sgst,igst,cess,line_total,cost_rate) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
-    ).run(crypto.randomUUID(), t, docId, it.item_id, it.item_name, it.hsn_sac, it.qty, it.unit, it.price_unit, it.price_tax_incl, it.discount_pct, it.discount_amt, it.tax_pct, it.tax_amt, it.cgst, it.sgst, it.igst, it.cess, it.line_total, it.cost_rate);
-  }
+  const convertTx = db.transaction(() => {
+    // Mark estimate as converted
+    db.prepare(`UPDATE sale_documents SET status='converted', updated_at=? WHERE id=?`).run(now(), req.params.id);
+    // Generate invoice number inside transaction
+    const doc_no = nextDocNo(db, t, doc.firm_id, doc.terminal_id, 'invoice');
+    db.prepare(`INSERT INTO sale_documents(id,tenant_id,firm_id,store_id,terminal_id,doc_type,doc_no,doc_date,party_id,sub_total,discount_amt,tax_amt,other_charges,round_off,total,paid_amt,balance_amt,status,notes,terms,orig_doc_id,created_by,created_at,updated_at,version,sync_state) VALUES(?,?,?,?,?,'invoice',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,'synced')`
+    ).run(docId, t, doc.firm_id, doc.store_id, doc.terminal_id, doc_no, new Date().toISOString().slice(0, 10), doc.party_id, doc.sub_total, doc.discount_amt, doc.tax_amt, doc.other_charges, doc.round_off, doc.total, 0, doc.total, 'open', doc.notes, doc.terms, req.params.id, req.user.sub, now(), now());
+    for (const it of items) {
+      db.prepare(`INSERT INTO sale_document_items(id,tenant_id,document_id,item_id,item_name,hsn_sac,qty,unit,price_unit,price_tax_incl,discount_pct,discount_amt,tax_pct,tax_amt,cgst,sgst,igst,cess,line_total,cost_rate) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      ).run(crypto.randomUUID(), t, docId, it.item_id, it.item_name, it.hsn_sac, it.qty, it.unit, it.price_unit, it.price_tax_incl, it.discount_pct, it.discount_amt, it.tax_pct, it.tax_amt, it.cgst, it.sgst, it.igst, it.cess, it.line_total, it.cost_rate);
+    }
+  });
+  convertTx();
 
   res.status(201).json({ data: db.prepare(`SELECT * FROM sale_documents WHERE id=?`).get(docId) });
 });

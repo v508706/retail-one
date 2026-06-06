@@ -197,13 +197,24 @@ function seed() {
     ).run(crypto.randomUUID(), tenantId, pid, now());
   }
 
-  // document sequences
-  db.prepare(`INSERT OR IGNORE INTO document_sequences(id,tenant_id,firm_id,terminal_id,doc_type,prefix,next_no) VALUES(?,?,?,?,?,?,1)`
-  ).run(crypto.randomUUID(), tenantId, firmId, terminalId, 'invoice', 'INV-');
-  db.prepare(`INSERT OR IGNORE INTO document_sequences(id,tenant_id,firm_id,terminal_id,doc_type,prefix,next_no) VALUES(?,?,?,?,?,?,1)`
-  ).run(crypto.randomUUID(), tenantId, firmId, terminalId, 'purchase', 'PUR-');
-  db.prepare(`INSERT OR IGNORE INTO document_sequences(id,tenant_id,firm_id,terminal_id,doc_type,prefix,next_no) VALUES(?,?,?,?,?,?,1)`
-  ).run(crypto.randomUUID(), tenantId, firmId, terminalId, 'estimate', 'EST-');
+  // Document sequences — pre-seed ALL types so nextDocNo never has to
+  // create them on-the-fly (prevents the duplicate-on-first-use bug).
+  const docSeqs = [
+    { doc_type: 'invoice',           prefix: 'INV-'  },
+    { doc_type: 'pos',               prefix: 'POS-'  },
+    { doc_type: 'estimate',          prefix: 'EST-'  },
+    { doc_type: 'proforma',          prefix: 'PRO-'  },
+    { doc_type: 'sale_order',        prefix: 'SO-'   },
+    { doc_type: 'delivery_challan',  prefix: 'DC-'   },
+    { doc_type: 'credit_note',       prefix: 'CN-'   },
+    { doc_type: 'purchase',          prefix: 'PUR-'  },
+    { doc_type: 'purchase_return',   prefix: 'PRR-'  },
+    { doc_type: 'purchase_order',    prefix: 'PO-'   },
+  ];
+  const insSeq = db.prepare(`INSERT OR IGNORE INTO document_sequences(id,tenant_id,firm_id,terminal_id,doc_type,prefix,next_no) VALUES(?,?,?,?,?,?,1)`);
+  for (const s of docSeqs) {
+    insSeq.run(crypto.randomUUID(), tenantId, firmId, terminalId, s.doc_type, s.prefix);
+  }
 
   // default invoice template
   db.prepare(`INSERT OR IGNORE INTO invoice_templates(id,tenant_id,firm_id,name,doc_type,layout,theme_color,show_logo,is_default,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`

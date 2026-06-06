@@ -8,15 +8,25 @@ const router = Router();
 const now = () => new Date().toISOString();
 
 function nextPurchaseNo(db, t, firmId, docType) {
-  const seq = db.prepare(`SELECT * FROM document_sequences WHERE tenant_id=? AND firm_id=? AND doc_type=?`).get(t, firmId, docType);
+  // Must be called INSIDE a transaction.
+  const defaultPrefix = docType === 'purchase_return' ? 'PRR-'
+    : docType === 'purchase_order' ? 'PO-' : 'PUR-';
+
+  let seq = db.prepare(
+    `SELECT * FROM document_sequences WHERE tenant_id=? AND firm_id=? AND doc_type=?`
+  ).get(t, firmId, docType);
+
   if (!seq) {
-    const id = crypto.randomUUID();
-    db.prepare(`INSERT INTO document_sequences(id,tenant_id,firm_id,doc_type,prefix,next_no) VALUES(?,?,?,?,?,1)`).run(id, t, firmId, docType, 'PUR-');
-    return 'PUR-1';
+    // Start at 2 so the next call correctly gets 2 (not another 1)
+    db.prepare(
+      `INSERT INTO document_sequences(id,tenant_id,firm_id,doc_type,prefix,next_no) VALUES(?,?,?,?,?,2)`
+    ).run(crypto.randomUUID(), t, firmId, docType, defaultPrefix);
+    return `${defaultPrefix}1`;
   }
-  const no = `${seq.prefix}${seq.next_no}`;
+
+  const used = seq.next_no;
   db.prepare(`UPDATE document_sequences SET next_no=next_no+1 WHERE id=?`).run(seq.id);
-  return no;
+  return `${seq.prefix}${used}`;
 }
 
 // â”€â”€ PURCHASES â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -57,7 +67,6 @@ router.post('/purchases', requireAuth, (req, res) => {
   if (!firm_id) return res.status(422).json({ error: { code: 'VALIDATION_FAILED', message: 'firm_id required' } });
 
   const docId = crypto.randomUUID();
-  const doc_no = nextPurchaseNo(db, t, firm_id, doc_type);
   const date = doc_date || new Date().toISOString().slice(0, 10);
 
   const processedItems = rawItems.map(it => {
@@ -72,6 +81,8 @@ router.post('/purchases', requireAuth, (req, res) => {
   const status = balance_amt <= 0 ? 'paid' : paid_amt > 0 ? 'partial' : 'open';
 
   const tx = db.transaction(() => {
+    // Generate doc_no INSIDE the transaction — atomic with the INSERT
+    const doc_no = nextPurchaseNo(db, t, firm_id, doc_type);
     db.prepare(`INSERT INTO purchase_documents(id,tenant_id,firm_id,doc_type,doc_no,doc_date,party_id,grn_no,sub_total,discount_amt,tax_amt,round_off,total,paid_amt,balance_amt,status,created_at,updated_at,version,sync_state) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,'synced')`
     ).run(docId, t, firm_id, doc_type, doc_no, date, party_id || null, grn_no || null, sub_total, discount_amt, tax_amt, round_off, total, paid_amt, balance_amt, status, now(), now());
 
