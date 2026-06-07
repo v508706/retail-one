@@ -118,24 +118,26 @@ route('GET','/items', function() {
     if ($search) { $where .= ' AND (i.name LIKE ? OR i.sku LIKE ?)'; $params[] = "%$search%"; $params[] = "%$search%"; }
     if ($catId)  { $where .= ' AND i.category_id=?'; $params[] = $catId; }
 
-    $base = "FROM items i
-             LEFT JOIN units u ON u.id=i.unit_id
-             LEFT JOIN categories c ON c.id=i.category_id
-             LEFT JOIN tax_rates tr ON tr.id=i.tax_rate_id
-             LEFT JOIN item_prices ip ON ip.item_id=i.id
-             WHERE $where";
+    $joins = "FROM items i
+              LEFT JOIN units u ON u.id=i.unit_id
+              LEFT JOIN categories c ON c.id=i.category_id
+              LEFT JOIN tax_rates tr ON tr.id=i.tax_rate_id
+              LEFT JOIN item_prices ip ON ip.item_id=i.id
+              WHERE $where";
 
-    [$rows,$total] = DB::paginate(
-        "SELECT COUNT(*) $base",
+    // COUNT uses $params only (no subquery extra param)
+    $total = DB::count("SELECT COUNT(*) $joins", $params);
+
+    // ROW query has a stock subquery needing an extra $tid at the front
+    $rows = DB::all(
         "SELECT i.*,
                 u.short_name as unit_name, u.name as unit_full_name,
                 c.name as category_name,
                 tr.rate as tax_rate, tr.name as tax_name,
                 ip.sale_price, ip.mrp, ip.purchase_price, ip.wholesale_price, ip.online_price,
                 COALESCE((SELECT SUM(qty) FROM stock_movements sm WHERE sm.item_id=i.id AND sm.tenant_id=?),0) as current_stock
-         $base ORDER BY i.name",
-        array_merge([$tid], $params),
-        $perPage, $offset
+         $joins ORDER BY i.name LIMIT ? OFFSET ?",
+        array_merge([$tid], $params, [$perPage, $offset])
     );
     paginated($rows, $total, $page, $perPage);
 });
