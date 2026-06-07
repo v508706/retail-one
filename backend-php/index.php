@@ -43,8 +43,9 @@ function route(string $method, string $pattern, callable $fn): void {
     // Strip query string from REQUEST_URI
     $uri = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
 
-    // Strip /api prefix if present (e.g. if reverse-proxied)
-    $uri = preg_replace('#^/api#', '', $uri);
+    // Strip /api/v1 or /api prefix (Vite proxy sends /api/v1/...)
+    $uri = preg_replace('#^/api/v1#', '', $uri);
+    $uri = preg_replace('#^/api#',    '', $uri);
     $uri = rtrim($uri, '/') ?: '/';
 
     // Convert :param → named capture group
