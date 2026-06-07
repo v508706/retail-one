@@ -6,7 +6,7 @@ import { Zap } from 'lucide-react';
 
 export default function LoginPage() {
   const navigate = useNavigate();
-  const [form, setForm] = useState({ email: 'admin@retailone.app', password: 'demo1234', tenant_slug: 'demo' });
+  const [form, setForm] = useState({ email: 'admin@demo.com', password: 'admin123', tenant_slug: 'demo' });
   const [loading, setLoading] = useState(false);
 
   async function handleSubmit(e) {
@@ -58,8 +58,8 @@ export default function LoginPage() {
 
         <div style={{ marginTop: 20, padding: 12, background: '#f0f4ff', borderRadius: 8, fontSize: 12, color: '#4b5563' }}>
           <strong>Demo credentials:</strong><br />
-          Email: admin@retailone.app<br />
-          Password: demo1234 / Slug: demo
+          Email: admin@demo.com<br />
+          Password: admin123 / Slug: demo
         </div>
       </div>
     </div>

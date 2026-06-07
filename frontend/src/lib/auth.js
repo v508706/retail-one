@@ -2,7 +2,9 @@ export function getUser() {
   try {
     const token = localStorage.getItem('access_token');
     if (!token) return null;
-    const payload = JSON.parse(atob(token.split('.')[1]));
+    // JWT uses URL-safe base64 (- and _); atob() needs standard base64 (+ and /)
+    const b64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+    const payload = JSON.parse(atob(b64));
     if (payload.exp * 1000 < Date.now()) return null;
     return payload;
   } catch { return null; }
